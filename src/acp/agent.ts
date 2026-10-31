@@ -97,6 +97,7 @@ export interface AgentHandle {
   readonly agentInfo: Implementation | null;
   /** Protocol version the agent agreed on (`1`). */
   readonly protocolVersion: number;
+  readonly canCloseSession: boolean;
   /** Turn-scoped agent text, keyed by sessionId (OQ3). */
   readonly text: TurnTextBuffer;
   /** Per-session cumulative cost buffer (C-0005). */
@@ -240,6 +241,7 @@ export async function openAgent(
     ctx: value.ctx,
     agentInfo: value.init.agentInfo ?? null,
     protocolVersion: value.init.protocolVersion,
+    canCloseSession: value.init.agentCapabilities?.sessionCapabilities?.close != null,
     text: textBuffer,
     cost: costBuffer,
     terminals,

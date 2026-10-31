@@ -6,7 +6,7 @@
  * for the integration layer.
  */
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAgentProcessPool,
   type AgentProcessPool,
@@ -48,6 +48,7 @@ function createFakeHandle(name: string): AgentHandle & FakeHandle {
     ctx: {} as AgentHandle["ctx"],
     agentInfo: null,
     protocolVersion: 1,
+    canCloseSession: false,
     text: { read: () => "", reset: () => {}, append: () => {} } as unknown as AgentHandle["text"],
     cost: { read: () => null, set: () => {} } as unknown as AgentHandle["cost"],
     terminals: {} as AgentHandle["terminals"],
@@ -246,8 +247,67 @@ describe("AgentProcessPool session re-keying (integration)", () => {
     const wt = `${PROJECT_ROOT}#wt-1`;
 
     await pool.session("claude", wt);
-    pool.closeSession("claude", wt);
+    await pool.closeSession("claude", wt);
     expect(pool.peek("claude", wt)).toBeUndefined();
+  });
+
+  function stderrRecordingSpawner(logs: Map<string, string>): AgentSpawner {
+    return async (name, opts) => {
+      logs.set(name, "");
+      const h = await openAgent({
+        command: opts.command as string[],
+        cwd: PROJECT_ROOT,
+        permissions: { on_request: "allow" },
+        onStderr: (chunk) => logs.set(name, `${logs.get(name)}${chunk}`),
+      });
+      handles.push(h);
+      return h;
+    };
+  }
+
+  it("releaseSessionsFor closes every agent's session of that worktree on the agent side", async () => {
+    const logs = new Map<string, string>();
+    const opts = new Map<string, PerAgentOptions>([
+      ["claude", { command: fakeCommand({ sessionClose: true }) }],
+      ["codex", { command: fakeCommand({ sessionClose: true }) }],
+    ]);
+    pool = await createAgentProcessPool(opts, stderrRecordingSpawner(logs));
+    const wtA = `${PROJECT_ROOT}#wt-a`;
+    const wtB = `${PROJECT_ROOT}#wt-b`;
+    const claudeA = await pool.session("claude", wtA);
+    const codexA = await pool.session("codex", wtA);
+    const claudeB = await pool.session("claude", wtB);
+
+    await pool.releaseSessionsFor(wtA);
+
+    expect(pool.peek("claude", wtA)).toBeUndefined();
+    expect(pool.peek("codex", wtA)).toBeUndefined();
+    expect(pool.peek("claude", wtB)).toBe(claudeB);
+    await vi.waitFor(() => {
+      expect(logs.get("claude")).toContain(`fake-agent: closed ${claudeA.sessionId}\n`);
+      expect(logs.get("codex")).toContain(`fake-agent: closed ${codexA.sessionId}\n`);
+    });
+    expect(logs.get("claude")).not.toContain(`fake-agent: closed ${claudeB.sessionId}\n`);
+  });
+
+  it("releaseSessionsFor waits for a session still opening, closes it and forgets it", async () => {
+    const logs = new Map<string, string>();
+    const opts = new Map<string, PerAgentOptions>([
+      ["claude", { command: fakeCommand({ sessionClose: true }) }],
+    ]);
+    pool = await createAgentProcessPool(opts, stderrRecordingSpawner(logs));
+    const wt = `${PROJECT_ROOT}#wt-1`;
+
+    const opening = pool.session("claude", wt);
+    await pool.releaseSessionsFor(wt);
+    const session = await opening;
+
+    expect(pool.peek("claude", wt)).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(logs.get("claude")).toContain(`fake-agent: closed ${session.sessionId}\n`);
+    });
+    const reopened = await pool.session("claude", wt);
+    expect(reopened).not.toBe(session);
   });
 
   it("closeAllSessions disposes all sessions but keeps processes alive", async () => {

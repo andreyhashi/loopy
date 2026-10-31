@@ -13,7 +13,7 @@
  * the `agent` step (T-014) drives, nothing more (AD-1 — no loop behavior here):
  *
  *  - {@link LoopySession.setMode} → `session/set_mode` (`plan` / `acceptEdits` …).
- *  - {@link LoopySession.clear}   → reopens the session (`dispose()` +
+ *  - {@link LoopySession.clear}   → reopens the session (`close()` +
  *    `session/new`); the wrapper is preserved but the `sessionId` changes.
  *  - {@link LoopySession.prompt}  → one prompt turn; resolves with the ACP
  *    `stopReason` only (never the text).
@@ -104,7 +104,7 @@ export interface SessionDeps {
   /** Called for every ACP JSON-RPC message (send/recv); pure observation (AD-1). */
   readonly onTraffic?: (entry: AcpTrafficEntry, sessionId: string) => void;
   /**
-   * Called when `clear()` reopens the session (`dispose()` + `session/new`).
+   * Called when `clear()` reopens the session (`close()` + `session/new`).
    * The wrapper's identity is preserved, but the underlying `sessionId` changes.
    * Consumers keyed by `sessionId` (e.g. `sessionToTask` in `index.ts`) must
    * re-register here.
@@ -117,6 +117,7 @@ export interface SessionDeps {
    */
   readonly onWarning?: (message: string) => void;
   readonly logger?: LoggerPort;
+  readonly canCloseSession?: boolean;
 }
 
 /** A worktree-bound ACP session plus explicit teardown. */
@@ -139,6 +140,7 @@ export interface LoopySession extends AgentSession {
   promptBlocks(blocks: ContentBlock[]): Promise<StopReason>;
   /** Stop routing this session's updates (teardown). Idempotent. */
   dispose(): void;
+  close(): Promise<void>;
 }
 
 /** Zero-valued usage accumulator — reused on init and reset. */
@@ -371,7 +373,7 @@ class SessionWrapper implements LoopySession {
   }
 
   /**
-   * Reset context by reopening the session: `dispose()` the current
+   * Reset context by reopening the session: `close()` the current
    * `ActiveSession` then `buildSession(cwd).start()` a fresh one. The wrapper
    * reference is preserved (pool/orchestrator caches stay valid), but the
    * underlying `sessionId` **changes**.
@@ -396,8 +398,8 @@ class SessionWrapper implements LoopySession {
       };
     }
 
-    // Dispose + open a fresh session on the same cwd.
-    this.active.dispose();
+    // Close + open a fresh session on the same cwd.
+    await this.close();
     this.active = await this.deps.ctx.buildSession(this.cwd).start();
     this.parseConfigFromSession(this.active);
 
@@ -448,6 +450,21 @@ class SessionWrapper implements LoopySession {
 
   dispose(): void {
     this.active.dispose();
+  }
+
+  async close(): Promise<void> {
+    this.active.dispose();
+    if (!this.deps.canCloseSession) return;
+    const params = { sessionId: this.sessionId };
+    this.send("session/close", params);
+    try {
+      await this.deps.ctx.request(AGENT_METHODS.session_close, params);
+      this.logAction("close");
+    } catch (err) {
+      this.deps.logger?.debug(
+        `[acp] session/close failed (${this.sessionId}): ${String(err)}`,
+      );
+    }
   }
 
   /** Sum of per-turn usage since last drain; resets the accumulator. */

@@ -455,6 +455,68 @@ describe("runLoop — agent session wiring", () => {
     expect(providerCalls).toEqual([]);
     expect(rec.order).toEqual(["T-1:a", "T-1:b"]);
   });
+
+  it("releases each task's sessions by worktree cwd when its pipeline ends, before the mark-done", async () => {
+    const events: string[] = [];
+    const { port } = recordingMarkDone((id) => events.push(`mark:${id}`));
+    const config = makeConfig([shell("a")]);
+    const root = "/abs/workspace";
+
+    const result = await runLoop(config, [makeTask("T-1"), makeTask("T-2")], {
+      ...makeDeps({ registry: scriptedRegistry({ order: [] }), markDone: port, root }),
+      releaseSessions: async (cwd) => {
+        events.push(`release:${cwd}`);
+      },
+    });
+
+    const cwdOf = (id: string): string => resolve(root, worktreePathFor(config, makeTask(id)));
+    expect(events).toEqual([
+      `release:${cwdOf("T-1")}`,
+      "mark:T-1",
+      `release:${cwdOf("T-2")}`,
+      "mark:T-2",
+    ]);
+    expect(result.completed).toEqual(["T-1", "T-2"]);
+  });
+
+  it("releases the sessions of a task whose pipeline failed", async () => {
+    const released: string[] = [];
+    const { port, marked } = recordingMarkDone();
+    const config = makeConfig([shell("a"), shell("b")], {
+      escalation: { action: "skip_task", keep_worktree: false, notify: "stderr" },
+    });
+    const root = "/abs/workspace";
+
+    const result = await runLoop(config, [makeTask("T-1")], {
+      ...makeDeps({
+        registry: scriptedRegistry({ order: [] }, { b: { ok: false, reason: "boom" } }),
+        markDone: port,
+        root,
+      }),
+      releaseSessions: async (cwd) => {
+        released.push(cwd);
+      },
+    });
+
+    expect(released).toEqual([resolve(root, worktreePathFor(config, makeTask("T-1")))]);
+    expect(marked).toEqual([]);
+    expect(result.escalated).toEqual(["T-1"]);
+  });
+
+  it("does not fail the task when releasing its sessions throws", async () => {
+    const { port, marked } = recordingMarkDone();
+    const config = makeConfig([shell("a")]);
+
+    const result = await runLoop(config, [makeTask("T-1")], {
+      ...makeDeps({ registry: scriptedRegistry({ order: [] }), markDone: port }),
+      releaseSessions: async () => {
+        throw new Error("agent gone");
+      },
+    });
+
+    expect(marked).toEqual(["T-1"]);
+    expect(result.completed).toEqual(["T-1"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

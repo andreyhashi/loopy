@@ -90,6 +90,7 @@ export interface FakeScenario {
   /** Behavior per prompt turn (0-based); turns past the end use `defaultTurn`. */
   readonly turns?: readonly FakeTurn[];
   readonly defaultTurn?: FakeTurn;
+  readonly sessionClose?: boolean;
 }
 
 const DEFAULT_TURN: FakeTurn = { text: ["ok"], stopReason: "end_turn" };
@@ -129,9 +130,15 @@ async function main(): Promise<void> {
   const app = agent({ name: "fake-agent" })
     .onRequest(AGENT_METHODS.initialize, () => ({
       protocolVersion: scenario.protocolVersion ?? PROTOCOL_VERSION,
-      agentCapabilities: {},
+      agentCapabilities: scenario.sessionClose
+        ? { sessionCapabilities: { close: {} } }
+        : {},
       agentInfo,
     }))
+    .onRequest(AGENT_METHODS.session_close, ({ params }) => {
+      process.stderr.write(`fake-agent: closed ${params.sessionId}\n`);
+      return {};
+    })
     .onRequest(AGENT_METHODS.session_new, () => {
       sessionSeq += 1;
       const response: {

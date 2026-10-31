@@ -10,7 +10,7 @@
  *    cancel -> teardown, plus the worktree-keyed pool (parallel-ready).
  */
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openAgent, type AgentHandle } from "../../src/acp/agent";
 import {
   buildSession,
@@ -935,5 +935,61 @@ describe("buildSession / session pool (against the fake agent)", () => {
     await session.cancel();
 
     session.dispose();
+  });
+
+  async function openRecordingCloses(
+    scenario: FakeScenario,
+  ): Promise<{ deps: SessionDeps; sent: AcpTrafficEntry[]; agentLog: () => string }> {
+    let stderr = "";
+    handle = await openAgent({
+      command: fakeCommand(scenario),
+      cwd: PROJECT_ROOT,
+      permissions: { on_request: "allow" },
+      onStderr: (chunk) => {
+        stderr += chunk;
+      },
+    });
+    const sent: AcpTrafficEntry[] = [];
+    const deps: SessionDeps = {
+      ctx: handle.ctx,
+      text: handle.text,
+      canCloseSession: handle.canCloseSession,
+      onTraffic: (entry) => {
+        if (entry.direction === "send") sent.push(entry);
+      },
+    };
+    return { deps, sent, agentLog: () => stderr };
+  }
+
+  it("clear() closes the previous session on the agent when it advertises session/close", async () => {
+    const { deps, agentLog } = await openRecordingCloses({ sessionClose: true });
+    const session = await buildSession(deps, PROJECT_ROOT).start();
+    const firstId = session.sessionId;
+
+    await session.clear();
+    const secondId = session.sessionId;
+    await session.clear();
+
+    await vi.waitFor(() => {
+      expect(agentLog()).toContain(`fake-agent: closed ${firstId}`);
+      expect(agentLog()).toContain(`fake-agent: closed ${secondId}`);
+    });
+    expect(agentLog()).not.toContain(`fake-agent: closed ${session.sessionId}`);
+
+    await session.close();
+    await vi.waitFor(() => {
+      expect(agentLog()).toContain(`fake-agent: closed ${session.sessionId}`);
+    });
+  });
+
+  it("clear() does not send session/close to an agent that does not advertise it", async () => {
+    const { deps, sent } = await openRecordingCloses({});
+    const session = await buildSession(deps, PROJECT_ROOT).start();
+
+    await session.clear();
+    await session.close();
+
+    expect(handle!.canCloseSession).toBe(false);
+    expect(sent.map((entry) => entry.method)).not.toContain("session/close");
   });
 });

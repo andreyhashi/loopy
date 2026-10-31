@@ -44,7 +44,8 @@ export interface AgentProcessPool {
   /** Already-open Session for `(agent, worktree)`, if any. */
   peek(agentName: string, cwd: string): LoopySession | undefined;
   /** Dispose the Session for `(agent, worktree)`. */
-  closeSession(agentName: string, cwd: string): void;
+  closeSession(agentName: string, cwd: string): Promise<void>;
+  releaseSessionsFor(cwd: string): Promise<void>;
   /** Dispose all Sessions (but keep processes alive). */
   closeAllSessions(): void;
   /** Shutdown every process and dispose every Session. Idempotent. */
@@ -72,6 +73,7 @@ function depsFromHandle(
     logger,
     onReopen,
     onWarning,
+    canCloseSession: handle.canCloseSession,
   };
 }
 
@@ -123,6 +125,17 @@ export async function createAgentProcessPool(
     opening.clear();
   }
 
+  async function closeSession(agentName: string, cwd: string): Promise<void> {
+    const key = sessionKey(agentName, cwd);
+    const pending = opening.get(key);
+    open.delete(key);
+    opening.delete(key);
+    const session = await pending?.catch(() => undefined);
+    if (session === undefined) return;
+    if (open.get(key) === session) open.delete(key);
+    await session.close();
+  }
+
   function getHandle(agentName: string): AgentHandle {
     const h = handles.get(agentName);
     if (!h) {
@@ -162,11 +175,12 @@ export async function createAgentProcessPool(
       return open.get(sessionKey(agentName, cwd));
     },
 
-    closeSession(agentName: string, cwd: string): void {
-      const key = sessionKey(agentName, cwd);
-      open.get(key)?.dispose();
-      open.delete(key);
-      opening.delete(key);
+    closeSession,
+
+    async releaseSessionsFor(cwd: string): Promise<void> {
+      await Promise.all(
+        [...handles.keys()].map((agentName) => closeSession(agentName, cwd)),
+      );
     },
 
     closeAllSessions: disposeSessions,

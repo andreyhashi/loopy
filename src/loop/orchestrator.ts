@@ -778,6 +778,21 @@ function createLazySession(open: () => Promise<AgentSession>): AgentSession {
   };
 }
 
+async function releaseTaskSessions(
+  config: LoopyConfig,
+  task: Task,
+  deps: OrchestratorDeps,
+): Promise<void> {
+  if (deps.releaseSessions === undefined) return;
+  try {
+    await deps.releaseSessions(resolve(deps.root, worktreePathFor(config, task)));
+  } catch (err) {
+    deps.logger.debug(
+      `[orchestrator] releaseSessions falhou para ${task.id}: ${String(err)}`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Abort port — hard-stop cancellation of in-flight tasks (T-007)
 // ---------------------------------------------------------------------------
@@ -842,6 +857,7 @@ export interface OrchestratorDeps {
    * absent (the non-agent spine), the fail-loud {@link session} is used instead.
    */
   readonly sessionProvider?: SessionProvider;
+  readonly releaseSessions?: (worktreeCwd: string) => Promise<void>;
   /**
    * Step-level checkpoint port (C-0002 resume). When present, `runLoop`
    * reconciles resume state before the loop and `runTaskPipeline` skips
@@ -1786,7 +1802,7 @@ export async function runLoop(
         deps,
         resumePoint,
         changeBaseSha,
-      );
+      ).finally(() => releaseTaskSessions(config, task, deps));
 
       if (outcome.ok) {
         const markDoneResult = await markDoneWithMutex(

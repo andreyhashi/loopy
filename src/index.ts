@@ -697,7 +697,7 @@ async function defaultRunLive(args: RunLiveArgs): Promise<RunLoopResult> {
     const def = config.resolvedAgents.byName[name]!;
     writeCache(dirname(args.configPath), def.command, session.capabilities);
 
-    pool.closeSession(name, root);
+    await pool.closeSession(name, root);
   }
 
   const validation = validatePipelineCapabilities(
@@ -772,6 +772,7 @@ async function defaultRunLive(args: RunLiveArgs): Promise<RunLoopResult> {
       sessionToTask.set(session.sessionId, { taskId: basename(cwd), agent: agentName });
       return session;
     },
+    releaseSessions: (cwd) => pool.releaseSessionsFor(cwd),
     checkpoint: createCheckpointPort({ statePath, pipelineHash }),
     knownTaskIds,
     parentMutex,

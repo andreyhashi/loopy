@@ -14,7 +14,7 @@ O loop externo sobre o backlog: um **pool** de tasks dirigido pelo **scheduler**
 ## Usage Patterns
 - O PC avança conforme o resultado: sucesso sem `on_success` → `PC += 1`; Desvio → `PC = stepIndex[goto]`; falha com `escalate` → terminal. Em qualquer terminal, Steps `always:true` (teardown) rodam em ordem declarada, sem PC/salto. **Mas o teardown é suprimido** quando o terminal falhou E `keep_worktree` está ligado (não roda **nenhum** `always`, não só o de remover worktree).
 - **CLI sobrepõe o yml**: `--concurrency <n|auto>` e `--max-iterations` sobrescrevem os valores do config; `--task` força `concurrency = 1`. A resolução de `auto` é feita por `resolveConcurrency` (pura, no scheduler — ADR-0009).
-- **Sessões por-`(Agente, Worktree)` (ADR-0006):** `Map<agentName, AgentSession>` por Task; `buildTaskStepContext` resolve o Agente por Step via `resolveAgentBinding`. `SessionProvider = (agentName, cwd) => Promise<AgentSession>` — o orquestrador é agnóstico a "qual pool/quantos processos" (isso é do `index.ts`).
+- **Sessões por-`(Agente, Worktree)` (ADR-0006):** `Map<agentName, AgentSession>` por Task; `buildTaskStepContext` resolve o Agente por Step via `resolveAgentBinding`. `SessionProvider = (agentName, cwd) => Promise<AgentSession>` — o orquestrador é agnóstico a "qual pool/quantos processos" (isso é do `index.ts`). Quando o pipeline da Task termina (qualquer desfecho), `releaseSessions?(worktreeCwd)` fecha as Sessões dela — best-effort, falha só vira log; é o que solta o subprocesso do adapter.
 
 ## Anti-patterns
 - Não hardcodar ordem de steps, prompts, comandos ou política de escalação aqui — tudo vem do `config`.
