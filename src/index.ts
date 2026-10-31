@@ -111,7 +111,7 @@ import {
 import { openDb, type TelemetryDb } from "./telemetry/db";
 import { bootstrap } from "./telemetry/schema";
 import { markChangeMerged } from "./telemetry/write";
-import { mountApp } from "./tui/mount";
+import { loadMountApp } from "./tui/load-mount";
 import { startUi } from "./tui/start";
 import { toStoreEvent, type StoreEvent } from "./tui/store";
 import { createEventTransport, type Phase } from "./tui/transport";
@@ -570,7 +570,8 @@ async function defaultRunLive(args: RunLiveArgs): Promise<RunLoopResult> {
   const fileLogger = logFactory.forTask("loopy");
 
   // T-008: mount Ink + emit=dispatch + sessionId→taskId + logs arquivo-only.
-  const ui = startUi({ flags, mount: mountApp });
+  const mount = flags.tui && process.stdout.isTTY ? await loadMountApp() : undefined;
+  const ui = startUi({ flags, mount });
 
   // In TUI mode the Ink frame owns stdout — motor logs go file-only so they
   // don't corrupt the frame (OQ16). In fallback mode the teeLogger echoes to
